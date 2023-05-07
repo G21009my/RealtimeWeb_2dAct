@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>横スクロール</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body {
+            background-color: #ddd;
+        }
+
+        canvas {
+            background-color: #fff;
+        }
+    </style>
+    <script src="socket.io/socket.io.js"></script>
+    <!--socket.ioはサーバの実行時に自動で生成される-->
+
+    <script src="ActTool2D.js"></script>
+
+</head>
+
+<body>
+    <div class="container">
+        <h1>ball_prototype</h1>
+        <label class="roomLabel" id="roomLabel" for="rooms">部屋：</label>
+        <select class="form-control" id="rooms">
+            <option value="room01">部屋01</option>
+            <option value="room02">部屋02</option>
+            <option value="room03">部屋03</option>
+            <option value="room04">部屋04</option>
+            <option value="room05">部屋05</option>
+            <option value="room06">部屋06</option>
+        </select>
+        <button type="button" onclick="joinToRoom()">送信</button>
+        <br>
+        <div id="roomNum">
+            <p>=====ルーム番号=====</p>
+        </div>
+        <br>
+    </div>
+
+    <script type="text/javascript">
+        /**┏━━━━━━━━━━━━━━━━━━━━━━━━┓
+         * ┣━┳━━━━━━━━━━━━━━━━━━━━━━┛
+         * ┣━┫ ゲームロジック関連
+         * ┣┳╋┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┓*/
+        // ゲーム進行に関連する変数
+        let fps = 60; // 画面更新間隔(1000/fpsミリ秒で算出)
+        let roundTime = 60; // 1ラウンド毎の制限時間(秒)
+        let connectFreq = 100; // 通信頻度
+
+        let drFlag = true; // DRを動かすフラグ
+        let gameStart = false; // ゲームがスタートしているかのフラグ
+        /* ┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┛
+         * △▼△▼△▼△▼△▼△▼△▼△▼△▼△▼△▼△▼△▼△▼△▼ */
+
+        /**┏━━━━━━━━━━━━━━━━━━━━━━━━┓
+         * ┣━┳━━━━━━━━━━━━━━━━━━━━━━┛
+         * ┣━┫ ゲーム空間関連
+         * ┣┳╋┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┓*/
+        // ゲーム空間内での物理法則の強さ
+        let gPower = 15; // 重力の強さ
+        let thPower = 0.7; // アバタの加速力
+        let maxThrust = 5; // アバタの限界加速度
+        let maxSpeed = 18; // アバタの限界速度
+        let jPower = 360; // アバタのジャンプ力
+        let airResist = 0; // 大気摩擦力
+        let groundResist = 0; // 地表面摩擦力
+
+        // ゲーム空間内での物理法則の有無
+        let graviyFlag = true; // 重力の有無
+        let thrustFlag = true; // 加速度・加速力の有無(ない場合はいきなり最高速になる)
+        let airResistFlaf = false; // 大気摩擦の有無
+        let groundResistFlag = false; // 地表面摩擦の有無
+
+        // 以下はmap要素を格納したjsonファイルで初期化されるマップ関連の配列
+        // マップの読み込み
+        const mapBlock = [];
+        // 共有オブジェクト
+        let shareObj = {};
+        /* ┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┛
+         * △▼△▼△▼△▼△▼△▼△▼△▼△▼△▼△▼△▼△▼△▼△▼ */
+
+        /**┏━━━━━━━━━━━━━━━━━━━━━━━━┓
+         * ┣━┳━━━━━━━━━━━━━━━━━━━━━━┛
+         * ┣━┫ 自己アバタ関連
+         * ┣┳╋┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┓*/
+        // アバタのサイズ
+        let avaterHeight = 30;
+        let avaterWedth = 30;
+        let avaterRadi = 15;
+        // 各アバタの座標
+        let avatarCoor = {
+            'my': { x: 0, y: 0, ground: false },
+            'enemy': { x: 0, y: 0, ground: false }
+        };
+        // 各アバタの速度と加速度
+        let avatarVec = {
+            'my': { thX: 0, thY: 0, spX: 0, spY: 0 },
+            'enemy': { thX: 0, thY: 0, spX: 0, spY: 0 }
+        };
+        /* ┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┛
+         * △▼△▼△▼△▼△▼△▼△▼△▼△▼△▼△▼△▼△▼△▼△▼ */
+
+        /**┏━━━━━━━━━━━━━━━━━━━━━━━━┓
+         * ┣━┳━━━━━━━━━━━━━━━━━━━━━━┛
+         * ┣━┫ 他アバタ関連
+         * ┣┳╋┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┓*/
+        /** 他アバタ位置情報
+         * {
+         *  socketId:{ x:x座標, y:y座標, sObj:{オブジェクト番号:false}},
+         *  socketId{ ... }
+         * } */
+        let otherAvatarInfo = {};
+
+        /** 他アバタの予測座標
+         * {
+         *  socketId:{
+         *      drX: 予測x座標,
+         *      drY: 予測Y座標,
+         *      lastX: 最後に受信したx座標,
+         *      lastX2: 最後の受信から2f前のx座標
+         *      lastX3: ⇑,
+         *      lastY: 最後に受信したx座標,
+         *      lastY2: 最後の受信から2f前のy座標,
+         *      lastY3: ⇑
+         *  },
+         *  socketId{ ... }
+         * } */
+        let drOA = {};
+        /* ┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┛
+         * △▼△▼△▼△▼△▼△▼△▼△▼△▼△▼△▼△▼△▼△▼△▼ */
+
+        /**┏━━━━━━━━━━━━━━━━━━━━━━━━┓
+         * ┣━┳━━━━━━━━━━━━━━━━━━━━━━┛
+         * ┣━┫ ルーム・ログ関連
+         * ┣┳╋┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┓*/
+        const socket = io.connect();
+
+        let roomId = document.getElementById("rooms");
+        let socketId = '';
+        let playerNum = 0;
+
+        let gameRoop = 0; // ゲームが開始してからの累計フレーム数
+        let sendCount = 0; // サーバにデータを送信した回数
+
+        let recepCount = 0; // サーバから受信した回数
+        let recepEnRoop = 0; // 最後に受信した相手の経過F数
+
+        let timeSt = 0; // 時間
+
+        /** ログに記録する用の配列
+         *
+        */
+        let logArray = [];
+        /* ┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┛
+         * △▼△▼△▼△▼△▼△▼△▼△▼△▼△▼△▼△▼△▼△▼△▼ */
+
+
+        /**┏━━━━━━━━━━━━━━━━━━━━━━━━┓
+         * ┣━┳━━━━━━━━━━━━━━━━━━━━━━┛
+         * ┣━┫ キャンバス
+         * ┣┳╋┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┓*/
+        // キャンバスサイズ
+        const cWidth = 700;
+        const cHeight = 500;
+        // canvas 要素の生成 & 宣言
+        const canvas = document.createElement("canvas");
+        const context = canvas.getContext('2d');
+        // 使用キャンバス要素の名前
+        canvas.id = 'view';
+        canvas.width = cWidth;
+        canvas.height = cHeight;
+        // body要素の最後にキャンバス要素 'view' を追加
+        document.body.insertAdjacentElement("beforeend", canvas);
+        /* ┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┛
+         * △▼△▼△▼△▼△▼△▼△▼△▼△▼△▼△▼△▼△▼△▼△▼ */
+
+        /**┏━━━━━━━━━━━━━━━━━━━━━━━━┓
+         * ┣━┳━━━━━━━━━━━━━━━━━━━━━━┛
+         * ┣━┫ キーボード入力関連
+         * ┣┳╋┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┓*/
+        // キーボードの入力状態を記録する配列の定義
+        let input_key_buffer = new Array();
+        // キーボードの入力イベントをトリガーに配列のフラグ値を更新させる
+        window.addEventListener("keydown", handleKeydown);
+        function handleKeydown(e) {
+            e.preventDefault();
+            input_key_buffer[e.keyCode] = true;
+        }
+        window.addEventListener("keyup", handleKeyup);
+        function handleKeyup(e) {
+            e.preventDefault();
+            input_key_buffer[e.keyCode] = false;
+        }
+        // 移動以外で使うキー
+        input_key_buffer[32] = false; // spaceキー
+        // 矢印キー
+        input_key_buffer[37] = false; // 左矢印キー
+        input_key_buffer[38] = false; // 上矢印キー
+        input_key_buffer[39] = false; // 右矢印キー
+        input_key_buffer[40] = false; // 下矢印キー
+        // WASDキー
+        input_key_buffer[87] = false; // Wキー
+        input_key_buffer[65] = false; // Aキー
+        input_key_buffer[68] = false; // Sキー
+        input_key_buffer[83] = false; // Dキー
+        /* ┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┛
+         * △▼△▼△▼△▼△▼△▼△▼△▼△▼△▼△▼△▼△▼△▼△▼ */
+
+        /**┏━━━━━━━━━━━━━━━━━━━━━━━━┓
+         * ┣━┳━━━━━━━━━━━━━━━━━━━━━━┛
+         * ┣━┫ 操作関連の関数
+         * ┣┳╋┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┓*/
+        function keyUp() {
+
+            avatarCoor['my']['y'] += avatarVec['my']['spY'];
+            return 0;
+        }
+        function keyRight() {
+            // 右（x）方向への加速
+            avatarVec['my']['thX'] = actTool.thrustUp(
+                thPower,
+                avatarVec['my']['thX'],
+                maxThrust);
+            // 加速力に応じた右移動速度の決定
+            avatarVec['my']['spX'] = actTool.speedUp(
+                avatarVec['my']['thX'],
+                avatarVec['my']['spX'],
+                maxSpeed,
+                resistPower);
+            // 最終的な右方向への移動
+            avatarCoor['my']['X'] += avatarVec['my']['spX'];
+            return 0;
+        }
+        function keyLeft() {
+            // 左（-x）方向への加速
+            avatarVec['my']['thX'] = actTool.thrustUp(
+                -(thPower),
+                avatarVec['my']['thX'],
+                -(maxThrust));
+            // 加速力に応じた左移動速度の決定
+            avatarVec['my']['spY'] = actTool.speedUp(
+                avatarVec['my']['thX'],
+                avatarVec['my']['spX'],
+                -(maxSpeed),
+                resistPower);
+            // 最終的な左方向への移動
+            avatarCoor['my']['X'] += avatarVec['my']['spX'];
+            return 0;
+        }
+        /* ┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┛
+         * △▼△▼△▼△▼△▼△▼△▼△▼△▼△▼△▼△▼△▼△▼△▼ */
+
+        /**┏━━━━━━━━━━━━━━━━━━━━━━━━┓
+         * ┣━┳━━━━━━━━━━━━━━━━━━━━━━┛
+         * ┣━┫ socket 関連関数
+         * ┣┳╋┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┓*/
+        //
+        function joinToRoom() {
+            socket.emit("join_to_room")
+        }
+
+        //
+        socket.on("deciRoom", function (id, pNum) {
+            socketId = id;
+            playerNum = pNum;
+        });
+
+        //
+        socket.on("addOtherAvatar", function (socketId, x, y, obj) {
+            otherAvatarInfo[socketId] = { "x": x, "y": y, "obj": obj };
+
+            drOA[socketId] = {
+                "drX": x,
+                "drY": y,
+                "lastX": x,
+                "lastX2": x,
+                "lastX3": x,
+                "lastY": y,
+                "lastY2": y,
+                "lastY3": y
+            };
+        });
+
+        function sendToServer() {
+            sendCount++;
+
+            socket.emit( 'sendAvatar_toServer',
+                avatarCoor['my']['x'],
+                avatarCoor['my']['y'],
+                shareObj
+            )
+        }
+
+        //
+        socket.on("lisOtherAvatar", function (id, x, y, obj) {
+            otherAvatarInfo[socketId].x = x;
+            otherAvatarInfo[socketId].y = y;
+            otherAvatarInfo[socketId].obj = obj;
+
+            drOA[socketId].lastX3 = drOA[socketId].lastX2;
+            drOA[socketId].lastX2 = drOA[socketId].lastX;
+            drOA[socketId].lastX = x;
+            drOA[socketId].lastY3 = drOA[socketId].lastY2;
+            drOA[socketId].lastY2 = drOA[socketId].lastY;
+            drOA[socketId].lastY = y;
+        });
+
+        //
+        socket.on("no_vacancy", function () {
+            alert("満室 ─No Vacancy─");
+        });
+        /* ┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┛
+         * △▼△▼△▼△▼△▼△▼△▼△▼△▼△▼△▼△▼△▼△▼△▼ */
+
+        /**┏━━━━━━━━━━━━━━━━━━━━━━━━┓
+         * ┣━┳━━━━━━━━━━━━━━━━━━━━━━┛
+         * ┣━┫ main ループ
+         * ┣┳╋┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┓*/
+        function main() {
+        }
+        /* ┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┛
+         * △▼△▼△▼△▼△▼△▼△▼△▼△▼△▼△▼△▼△▼△▼△▼ */
+
+        /**┏━━━━━━━━━━━━━━━━━━━━━━━━┓
+         * ┣━┳━━━━━━━━━━━━━━━━━━━━━━┛
+         * ┣━┫
+         * ┣┳╋┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┳┓*/
+        /* ┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┻┛
+         * △▼△▼△▼△▼△▼△▼△▼△▼△▼△▼△▼△▼△▼△▼△▼ */
+    </script>
+</body>
+
+</html>
